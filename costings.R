@@ -52,10 +52,10 @@ s2021 <-
 # Tax contributions at marginal rate less 20ppts; cap contributions at 15k
 # Tax contributions at marginal rate less 20ppts; cap contributions at 20k
 
-
+cat("Contr. tax\tConc. Cap\tCosting/$bn\n")
 for (newContrTax in c("15%", "mr - 15%", "mr - 20%")) {
   for (newCap in c(11e3, 15e3, 20e3)) {
-    cat(formatC(newContrTax, width = nchar("mr - 20%")), "\t", scales::dollar(newCap), "\t")
+    cat(formatC(newContrTax, width = nchar("Contr. tax")), "\t", scales::dollar(newCap), "\t")
     s2021 %>%
       revenue_from_new_cap_and_div293(fy.year = "2019-20",
                                       prv_cap = 25e3,
@@ -63,10 +63,21 @@ for (newContrTax in c("15%", "mr - 15%", "mr - 20%")) {
                                       new_cap = newCap,
                                       prv_age_based_cap = FALSE) %>%
       divide_by(1e9) %>%
-      scales::dollar(.) %>%
-      cat("bn\n")
+      formatC(format = "f", flag = "#", digits = 1, width = nchar("Costing/$bn")) %>%
+      cat
+    cat("\n")
   }
 }
+
+# Verify or modify balances to line up with APRA
+TOTAL_AUM_APRA_1718 <- (1914087 + 2129 + 735400) * 1e6  # >4 members + <=4 members + SMSF
+TOTAL_AUM_APRA_1819 <- (2071149 + 2098 + 747600) * 1e6  # >4 members + <=4 members + SMSF
+TOTAL_AUM_APRA_1920 <- TOTAL_AUM_APRA_1819 * 1.07
+
+r_APRA_over_ATO <-
+  with(tax201718, {
+    TOTAL_AUM_APRA_1718 / sum(MCS_Ttl_Acnt_Bal * 50)
+  })
 
 
 # Tax all super earnings in retirement phase at 15%
@@ -77,20 +88,30 @@ with(s2021, {
 })
 
 
-revenue_from_bal_cap <- function(balance_cap) {
+revenue_from_bal_cap <- function(balance_cap, apra_concord = c("none", "balance", "weight")) {
+  apra_concord <- match.arg(apra_concord)
   with(s2021, {
     old_tax <- income_tax(Taxable_Income, "2020-21", .dots.ATO = s2021)
     # Assume 7% returns in accumulation, 5% in retiremtn
     # (7.3% five years to June 2019)
+
     wt <- first(WEIGHT)
+    if (apra_concord == "weight") {
+      wt <- r_APRA_over_ATO * wt
+    }
+    if (apra_concord == "balance") {
+      MCS_Ttl_Acnt_Bal <- r_APRA_over_ATO * MCS_Ttl_Acnt_Bal
+    }
     old_earnings <- if_else(age_range <= 1L, 0.05, 0.07) * MCS_Ttl_Acnt_Bal
     old_earnings_tax <- (age_range > 1) * 0.15 * old_earnings
     new_earnings <- if_else(age_range <= 1L, 0.05, 0.07) * pminC(MCS_Ttl_Acnt_Bal, balance_cap)
     new_earnings_tax <- (age_range > 1) * 0.15 * new_earnings
     extra_taxable_income <- if_else(age_range <= 1L, 0.05, 0.07) * pmax0(MCS_Ttl_Acnt_Bal - balance_cap)
 
-    # 121G in 2018-19 (after tax)
-    stopifnot(((sum(old_earnings) / 1.07)  * 0.85 * wt) %between% c(115e9, 125e9))
+    # 121G in 2018-19 (after tax -- hence the 0.85)
+    if (apra_concord == "none") {
+      stopifnot(((sum(old_earnings) / 1.07)  * 0.85 * wt) %between% c(115e9, 125e9))
+    }
 
     NewTaxableIncome <- extra_taxable_income + Taxable_Income
     new_tax <- income_tax(NewTaxableIncome, "2020-21", .dots.ATO = s2021)
@@ -101,7 +122,15 @@ revenue_from_bal_cap <- function(balance_cap) {
   })
 }
 
+cat("\n")
 # Lower transfer balance cap to 500k
 # Lower transfer balance cap to 750k
 # Lower transfer balance cap to 1m
-
+cat(formatC("Uprator", width = nchar("mr - 20%")), "\t", formatC("Balance cap", width = nchar(" $1,000,000")), "\t")
+cat(" Costing/$bn\n")
+for (balC in c(500e3, 750e3, 1e6)) {
+  for (apraC in c("none", "balance", "weight")) {
+    cat(formatC(apraC, width = nchar("mr - 20%")), "\t", formatC(scales::dollar(balC), width = nchar(" $1,000,000")), "\t")
+    cat(formatC(revenue_from_bal_cap(balC, apraC) / 1e9, format = "f", flag = "#", digits = 1, width = nchar(" Costing/$bn")), "\n")
+  }
+}
