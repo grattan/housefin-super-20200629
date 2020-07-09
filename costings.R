@@ -13,9 +13,12 @@ library(magrittr)
 library(hutils)
 library(hutilscpp)
 library(grattan)
+packageVersion("grattan") >= "1.9.0.0"
 
-tax201718 <- fread("../taxstats1718/2018_sample_file.csv")
-tax202122 <- project(tax201718,
+
+s1718 <- fread("../taxstats1718/2018_sample_file.csv")
+s1819 <- fread("../SampleFile1819/sample_file_1819.tsv")
+tax202122 <- project(s1718,
                      h = 4L,
                      differentially_uprate_Sw = FALSE,
                      fy.year.of.sample.file = "2017-18",
@@ -31,12 +34,21 @@ tax202122A <-
                             new_age_based_cap = FALSE,
                             prv_age_based_cap = FALSE)
 
-s2021 <-
-  fread("../taxstats1718/2018_sample_file.csv") %>%
+s2021_via_1718 <-
+  s1718 %>%
   project(h = 3L,
           differentially_uprate_Sw = FALSE,
           fy.year.of.sample.file = "2017-18",
-          lf.series = 0.01,
+          lf.series = 0,
+          .recalculate.inflators = TRUE,
+          check_fy_sample_file = FALSE)
+s2021_via_1819 <-
+  s1819 %>%
+  .[, Ind := seq_len(.N)] %>%
+  project(h = 2L,
+          differentially_uprate_Sw = FALSE,
+          fy.year.of.sample.file = "2018-19",
+          lf.series = 0,
           .recalculate.inflators = TRUE,
           check_fy_sample_file = FALSE)
 
@@ -52,19 +64,27 @@ s2021 <-
 # Tax contributions at marginal rate less 20ppts; cap contributions at 15k
 # Tax contributions at marginal rate less 20ppts; cap contributions at 20k
 
-cat("Contr. tax\tConc. Cap\tCosting/$bn\n")
+cat("Contr. tax\tConc. Cap\tCosting/$bn (1718 file)\tCosting/$bn (1819 file)\n")
 for (newContrTax in c("15%", "mr - 15%", "mr - 20%")) {
-  for (newCap in c(11e3, 15e3, 20e3)) {
-    cat(formatC(newContrTax, width = nchar("Contr. tax")), "\t", scales::dollar(newCap), "\t")
-    s2021 %>%
-      revenue_from_new_cap_and_div293(fy.year = "2019-20",
-                                      prv_cap = 25e3,
-                                      new_contr_tax = newContrTax,
-                                      new_cap = newCap,
-                                      prv_age_based_cap = FALSE) %>%
-      divide_by(1e9) %>%
-      formatC(format = "f", flag = "#", digits = 1, width = nchar("Costing/$bn")) %>%
-      cat
+  for (newCap in c(0, 11e3, 15e3, 20e3)) {
+    cat(formatC(newContrTax, width = nchar("Contr. tax")), "\t $",
+        formatC(as.integer(newCap), width = nchar("$35,000"), big.mark = ","), "\t",
+        sep = "")
+    for (orig_sample_file in list(s2021_via_1718, s2021_via_1819)) {
+      orig_sample_file %>%
+        revenue_from_new_cap_and_div293(fy.year = "2019-20",
+                                        prv_div293_threshold = 250e3,
+                                        new_div293_threshold = 250e3,
+                                        new_contr_tax = newContrTax,
+                                        new_cap = newCap,
+                                        prv_cap = 25e3,
+                                        new_age_based_cap = FALSE,
+                                        prv_age_based_cap = FALSE) %>%
+        divide_by(1e9) %>%
+        formatC(format = "f", flag = "#", digits = 1, width = nchar("Costing/$bn (1718 file)")) %>%
+        cat
+      cat("\t")
+    }
     cat("\n")
   }
 }
@@ -73,6 +93,12 @@ for (newContrTax in c("15%", "mr - 15%", "mr - 20%")) {
 TOTAL_AUM_APRA_1718 <- (1914087 + 2129 + 735400) * 1e6  # >4 members + <=4 members + SMSF
 TOTAL_AUM_APRA_1819 <- (2071149 + 2098 + 747600) * 1e6  # >4 members + <=4 members + SMSF
 TOTAL_AUM_APRA_1920 <- TOTAL_AUM_APRA_1819 * 1.07
+# https://www.apra.gov.au/sites/default/files/2020-01/Annual%20Superannuation%20Bulletin%20June%202019.pdf
+# (Also colocated PDF)
+APRA_NET_INVESTMENT_INCOME_1819 <- (128954 + 145 + 32623) * 1e6
+APRA_P_GEQ_5_MEMBERS <- 2071149 * 1e6 / TOTAL_AUM_APRA_1819
+APRA_NET_EARNINGS_POST_TAX_1819 <- 120986 * 1e6 / APRA_P_GEQ_5_MEMBERS ## >4 members
+
 
 r_APRA_over_ATO <-
   with(tax201718, {
@@ -80,18 +106,16 @@ r_APRA_over_ATO <-
   })
 
 
-# Tax all super earnings in retirement phase at 15%
-with(s2021, {
-  # Assume 7% returns in accumulation, 5% in retiremtn
-  earnings <- (age_range <= 1L) * 0.05 * MCS_Ttl_Acnt_Bal
-  earnings * 0.15
-})
-
-
-revenue_from_bal_cap <- function(balance_cap, apra_concord = c("none", "balance", "weight")) {
+revenue_from_bal_cap <- function(balance_cap,
+                                 sample_file = c("s2021_via_1718", "s2021_via_1819"),
+                                 apra_concord = c("none", "balance", "weight"),
+                                 r_earnings_retirement = 0.05,
+                                 r_earnings_accumulation = 0.07) {
   apra_concord <- match.arg(apra_concord)
+  sample_file <- match.arg(sample_file)
+  s2021 <- get(sample_file, mode = "list")
   with(s2021, {
-    old_tax <- income_tax(Taxable_Income, "2020-21", .dots.ATO = s2021)
+
     # Assume 7% returns in accumulation, 5% in retiremtn
     # (7.3% five years to June 2019)
 
@@ -102,19 +126,28 @@ revenue_from_bal_cap <- function(balance_cap, apra_concord = c("none", "balance"
     if (apra_concord == "balance") {
       MCS_Ttl_Acnt_Bal <- r_APRA_over_ATO * MCS_Ttl_Acnt_Bal
     }
-    old_earnings <- if_else(age_range <= 1L, 0.05, 0.07) * MCS_Ttl_Acnt_Bal
-    old_earnings_tax <- (age_range > 1) * 0.15 * old_earnings
-    new_earnings <- if_else(age_range <= 1L, 0.05, 0.07) * pminC(MCS_Ttl_Acnt_Bal, balance_cap)
-    new_earnings_tax <- (age_range > 1) * 0.15 * new_earnings
-    extra_taxable_income <- if_else(age_range <= 1L, 0.05, 0.07) * pmax0(MCS_Ttl_Acnt_Bal - balance_cap)
+    r_earnings <- if_else(age_range <= 1L, r_earnings_retirement, r_earnings_accumulation)
 
-    # 121G in 2018-19 (after tax -- hence the 0.85)
-    if (apra_concord == "none") {
-      stopifnot(((sum(old_earnings) / 1.07)  * 0.85 * wt) %between% c(115e9, 125e9))
-    }
+    old_earnings <- r_earnings * MCS_Ttl_Acnt_Bal
+    old_earnings_tax <- (age_range > 1) * 0.15 * old_earnings
+    old_net_earnings_post_tax <- old_earnings - old_earnings_tax
+    new_earnings <- r_earnings * pminC(MCS_Ttl_Acnt_Bal, balance_cap)
+    new_earnings_tax <- (age_range > 1) * 0.15 * new_earnings
+    extra_taxable_income <- r_earnings * pmax0(MCS_Ttl_Acnt_Bal - balance_cap)
+    extra_taxable_income <- extra_taxable_income * 0.5 # CGT
+    #
+    old_earnings2021 <- sum(old_net_earnings_post_tax) * wt
+    avg_growth <- mean(r_earnings)
+    old_earnings1819 <- (old_earnings2021) / (avg_growth ^ 2)
+    net_old_earnings1819 <- sum(old_net_earnings_post_tax) * wt
+
 
     NewTaxableIncome <- extra_taxable_income + Taxable_Income
+
     new_tax <- income_tax(NewTaxableIncome, "2020-21", .dots.ATO = s2021)
+    old_tax <- income_tax(Taxable_Income, "2020-21", .dots.ATO = s2021)
+    new_earnings_tax <- (age_range > 1) * 0.15 * new_earnings
+    old_earnings_tax <- (age_range > 1) * 0.15 * old_earnings
 
     delta <- new_tax - old_tax + new_earnings_tax - old_earnings_tax
 
@@ -128,9 +161,18 @@ cat("\n")
 # Lower transfer balance cap to 1m
 cat(formatC("Uprator", width = nchar("mr - 20%")), "\t", formatC("Balance cap", width = nchar(" $1,000,000")), "\t")
 cat(" Costing/$bn\n")
-for (balC in c(500e3, 750e3, 1e6)) {
+for (balC in c(100e3, 500e3, 750e3, 1e6)) {
   for (apraC in c("none", "balance", "weight")) {
-    cat(formatC(apraC, width = nchar("mr - 20%")), "\t", formatC(scales::dollar(balC), width = nchar(" $1,000,000")), "\t")
-    cat(formatC(revenue_from_bal_cap(balC, apraC) / 1e9, format = "f", flag = "#", digits = 1, width = nchar(" Costing/$bn")), "\n")
+    for (sa_f in c("s2021_via_1718", "s2021_via_1819")) {
+      cat(formatC(apraC, width = nchar("mr - 20%")),
+          "\t",
+          formatC(scales::dollar(balC), width = nchar(" $1,000,000")),
+          "\t")
+      cat(formatC(revenue_from_bal_cap(balC, sa_f, apraC) / 1e9,
+                  format = "f",
+                  flag = "#",
+                  digits = 1,
+                  width = nchar(" Costing/$bn")), "\n")
+    }
   }
 }
