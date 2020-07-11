@@ -610,7 +610,7 @@ grattan_save_all(provide.file("Figure-6-2/Figure62.pdf"), {
     # Use 'most common taxable income of people paying small but nozero tax
     # as proxy for true taxfree threshold
     mutate(taxfree_threshold = Mode(Taxable_Income[tax %between% c(1, 100)]),
-           # This it the amount available if earnings were taxed at 15%
+           # This is the amount available if earnings were taxed at 15%
            minTaxable_Income_blw_15pc = min(Taxable_Income[MarginalRate > 0.15])) %>%
     ungroup %>%
     mutate(unused_taxfree_threshold = pmax0(taxfree_threshold - Taxable_Income),

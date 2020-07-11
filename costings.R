@@ -101,7 +101,7 @@ APRA_NET_EARNINGS_POST_TAX_1819 <- 120986 * 1e6 / APRA_P_GEQ_5_MEMBERS ## >4 mem
 
 
 r_APRA_over_ATO <-
-  with(tax201718, {
+  with(s1718, {
     TOTAL_AUM_APRA_1718 / sum(MCS_Ttl_Acnt_Bal * 50)
   })
 
