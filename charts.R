@@ -1,5 +1,7 @@
 options("dplyr.summarise.inform" = FALSE)
 options(digits = 3)
+options(scipen = 99)
+library(hutilscpp)
 library(taxstats)
 library(grattanCharts)
 library(tidyr)
@@ -9,6 +11,8 @@ library(magrittr)
 library(grattantheme)
 library(grattandata)
 library(hutils)
+
+"%between%" <- data.table::`%between%`
 
 
 #' Stacked charts with labels at right
@@ -477,8 +481,194 @@ grattan_save_all(provide.file("Figure-4-7/Figure47.pdf"), {
 })
 
 # Figure 5.1
+grattan_save_all(provide.file("Figure-5-1/Figure51.pdf"), {
+  s2021 %>%
+    as_tibble %>%
+    mutate(Age = if_else(age_range <= 3, "55+", "<55")) %>%
+    mutate(TaxBracket = case_when(Taxable_Income <= 18200 ~ "Less than\n$18,200",
+                                  Taxable_Income <= 37000 ~ "$18,200 - $37,000",
+                                  Taxable_Income <= 90000 ~ "$37,000 - $90,000",
+                                  Taxable_Income <= 180e3 ~ "$90,000 - $180,000",
+                                  TRUE ~ "180,000+")) %>%
+    mutate(TaxBracket = factor(TaxBracket,
+                               levels = c("Less than\n$18,200",
+                                          "$18,200 - $37,000",
+                                          "$37,000 - $90,000",
+                                          "$90,000 - $180,000",
+                                          "180,000+"))) %>%
+    group_by(Age, TaxBracket) %>%
+    summarise(tot = sum(concessional_contributions - SG_contributions)) %>%
+    ungroup %>%
+    mutate(p = tot / sum(tot),
+           ordering = if_else(Age != "55+", as.integer(TaxBracket), 21L - as.integer(TaxBracket))) %>%
+
+    arrange(desc(ordering)) %>%
+    mutate(text_y = cumsum(dplyr::lag(p, default = 0)) + p / 2,
+           text_label = if_else(TaxBracket %in% levels(TaxBracket)[1:2], "", as.character(TaxBracket)),
+           text_label = gsub(",000", "k", text_label)) %>%
+
+    ggplot(aes(x = 1,
+               y = p,
+               fill = Age,
+               group = interaction(ordering, Age))) +
+    geom_col() +
+    coord_polar(theta = "y", direction = 1) +
+    scale_y_continuous_grattan(expand_top = 0,
+                               breaks = c(0, 10, 37, 55, 60, 65, 82, 97) / 100,
+                               labels = function(x) paste0(as.integer(x * 100), "%")) +
+    geom_text(aes(x = 1.15,
+                  label = text_label,
+                  y = text_y,
+                  group = interaction(ordering, Age))) +
+    theme_grattan() +
+    theme(axis.text.y = element_blank(),
+          axis.title = element_blank(),
+          panel.grid = element_blank(),
+          axis.line = element_blank(),
+          legend.title = element_text(hjust = 0),
+          legend.position = "right",
+          legend.direction = "vertical") +
+    guides(fill = guide_legend("Age")) +
+    grattan_fill_manual(n = 2) +
+    ggtitle("Voluntary post-tax contributions are mostly made by those who are older and on high incomes",
+            subtitle = "Percentage of voluntary post-tax contributions, 2020-21")
+
+})
 # Figure 5.2
+grattan_save_all(provide.file("Figure-5-2/Figure52.pdf"), {
+  s2021 %>%
+    mutate(Balance = cut(MCS_Ttl_Acnt_Bal,
+                         breaks = c(-Inf, 100e3, 250e3, 500e3, 750e3, 1e6, 2e6, Inf),
+                         labels = c("Less than $100,000",
+                                    "$100,000 to $250,000",
+                                    "$250,000 to $500,000",
+                                    "$500,000 to $750,000",
+                                    "$750,000 to $1 million",
+                                    "$1 million to $2 million",
+                                    "More than $2 million"),
+                         ordered_result = TRUE)) %>%
+    group_by(Balance) %>%
+    summarise(n_taxfilers = n(),
+              v_posttax_contributions = sum(non_concessional_contributions)) %>%
+    mutate(p_taxfilers = n_taxfilers / sum(n_taxfilers),
+           p_posttax_contributions = v_posttax_contributions / sum(v_posttax_contributions)) %>%
+    pivot_longer(grep("^p_", names(.), value = TRUE)) %>%
+    mutate(name = trim_common_affixes(name),
+           name = factor(if_else(name %ein% "taxfiler", "Taxfilers", "Post-tax contributions"),
+                         levels = c("Taxfilers", "Post-tax contributions"),
+                         ordered = TRUE)) %>%
+    arrange(name, Balance) %>%
+    group_by(name) %>%
+    mutate(text_y = cumsum(dplyr::lag(value, default = 0)) + value / 2,
+           text_color = if_else(Balance %ein% c("More than $2 million",
+                                                "$1 million to $2 million"),
+                                "white",
+                                "black"),
+           text_color = if_else(name == "Taxfilers", NA_character_, text_color)) %>%
+    ggplot(aes(x = name, y = value, fill = Balance)) +
+    geom_col(position = position_stack(reverse = TRUE)) +
+    geom_text(aes(x = name, y = text_y, label = Balance,
+                  color = text_color),
+              position = position_identity(),
+              na.rm = TRUE) +
+    scale_color_identity() +
+    scale_fill_manual(values = c(grattantheme::grattan_lightyellow, grattantheme::grattan_yellow,
+                                 grattantheme::grattan_lightorange, grattantheme::grattan_darkorange,
+                                 grattantheme::grattan_red, grattantheme::grattan_darkred,
+                                 "black")) +
+    theme_grattan() +
+    theme(axis.title.x = element_blank()) +
+    scale_y_continuous_grattan(labels = function(x) paste0(as.integer(x * 100), "%"))
+})
+
 # Figure 6.1
+# Superannuation earnings by 60+ year old, 2015-16
+# grattan_save_all(provide.file("Figure-6-1/Figure61.pdf"), {
+#   s2021 %>%
+#
+# })
+
+
+# Figure 6.2
+# Average additional tax paid by 60+ year olds under reform proposals, by
+# total income decile (including super earnings), $2015-16
+grattan_save_all(provide.file("Figure-6-2/Figure62.pdf"), {
+  s2021 %>%
+    .[, MarginalRate := grattan:::marginal_rate(.SD, fy.year = "2020-21")] %>%
+    mutate(tax = income_tax(Taxable_Income, "2020-21", .dots.ATO = .)) %>%
+    as_tibble %>%
+    # select()s hereinafter are just for debugging (to view files)
+    select(age_range, Partner_status,
+           MCS_Ttl_Acnt_Bal,
+           MarginalRate,
+           Taxable_Income, Tot_inc_amt, WEIGHT, tax) %>%
+    filter(age_range <= 2) %>%
+
+    # tax free threshold assumed to depend only on the following:
+    group_by(age_range, Partner_status) %>%
+
+    # Use 'most common taxable income of people paying small but nozero tax
+    # as proxy for true taxfree threshold
+    mutate(taxfree_threshold = Mode(Taxable_Income[tax %between% c(1, 100)]),
+           # This it the amount available if earnings were taxed at 15%
+           minTaxable_Income_blw_15pc = min(Taxable_Income[MarginalRate > 0.15])) %>%
+    ungroup %>%
+    mutate(unused_taxfree_threshold = pmax0(taxfree_threshold - Taxable_Income),
+           unused_income_blw_15pc = pmax0(minTaxable_Income_blw_15pc - Taxable_Income)) %>%
+    mutate(earnings = 0.05 * MCS_Ttl_Acnt_Bal,
+           earnings_tax = 0.15 * earnings,
+
+           # Allow earnings to be transferred to Taxable Income only to the point
+           # minTaxable_Income_blw_15pc -- any more and the personal income tax
+           # paid would exceed the benefit of behaviour change
+           # 'transfer from super earnings to personal income tax'
+
+           earnings_w_behaviour_change = pmax0(earnings - unused_income_blw_15pc),
+           earnings_tax_w_behaviour_change = 0.15 * earnings_w_behaviour_change,
+           Taxable_Income_w_behaviour_change = Taxable_Income + pminV(earnings, unused_income_blw_15pc),
+
+           # Same thing except using earnings - 20k as the earnings at risk
+           earnings_abv_20k = pmax0(earnings - 20e3),
+           earnings_tax_abv_20k = 0.15 * earnings_abv_20k,
+           earnings_w_behaviour_change_20k_threshold = pmax0(earnings_abv_20k - unused_income_blw_15pc),
+           earnings_tax_w_behaviour_change_20k_threshold = 0.15 * earnings_w_behaviour_change_20k_threshold,
+           Taxable_Income_w_behaviour_change_20k_threshold = Taxable_Income + pminV(earnings_abv_20k, unused_income_blw_15pc),
+
+
+           TotalIncomePlusEarnings = Tot_inc_amt + earnings,
+           TotalIncomePlusEarningsDecile = weighted_ntile(TotalIncomePlusEarnings, n = 10L)) %>%
+    mutate(tax_behaviour_change = income_tax(Taxable_Income_w_behaviour_change,
+                                             "2020-21",
+                                             .dots.ATO = s2021[age_range <= 2]),
+           tax_behaviour_change_20k_threshold = income_tax(Taxable_Income_w_behaviour_change_20k_threshold,
+                                                           "2020-21",
+                                                           .dots.ATO = s2021[age_range <= 2])) %>%
+    group_by(TotalIncomePlusEarningsDecile) %>%
+    summarise(avg_extra_tax_ante_behaviour_change = mean(earnings_tax),
+              avg_extra_tax_post_behaviour_change = mean(tax_behaviour_change - tax + earnings_tax_w_behaviour_change),
+              avg_extra_tax_over20k = mean(earnings_tax_abv_20k),
+              avg_extra_tax_over20k_post_behaviour_change = mean(tax_behaviour_change_20k_threshold - tax + earnings_tax_w_behaviour_change_20k_threshold)) %>%
+    pivot_longer(grep("^avg_", names(.), value = TRUE)) %>%
+    mutate(Decile = factor(TotalIncomePlusEarningsDecile),
+           name = trim_common_affixes(name),
+           name = Switch(name,
+                         "ante_behaviour_change" = "15% tax on all super earnings",
+                         "post_behaviour_change" = "15% tax on all super earnings after behaviour change",
+                         "over20k" = "15% tax on super earnings over $20,000",
+                         "over20k_post_behaviour_change" = "15% tax on super earnings over $20,000\nafter behaviour change",
+                         DEFAULT = ""),
+           name = forcats::fct_inorder(name)) %>%
+    ggplot(aes(x = Decile, y = value, fill = name)) +
+    geom_col(position = position_dodge()) +
+    scale_y_continuous_grattan(labels = grattan_dollar) +
+    theme_grattan() +
+    theme(legend.position = c(0, 1),
+          legend.justification = c(0, 1),
+          legend.direction = "vertical") +
+    grattan_fill_manual(n = 4, palette = "dark") +
+    ggtitle("A tax on earnings in retirement would mostly affect those with higher incomes",
+            subtitle = "Average additional tax paid by 60+ year olds under reform proposals, by total income decile (including super earnings), 2020-21")
+})
 # Figure 6.2
 
 
