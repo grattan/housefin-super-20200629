@@ -155,6 +155,41 @@ revenue_from_bal_cap <- function(balance_cap,
   })
 }
 
+revenue_from_xfer_bal_cap <- function(new_balance_cap,
+                                      prv_balance_cap = 1.6e6,
+                                      sample_file = c("s2021_via_1718", "s2021_via_1819"),
+                                      apra_concord = c("none", "balance", "weight"),
+                                      r_earnings_retirement = 0.05,
+                                      r_earnings_accumulation = 0.07,
+                                      effective_tax_on_earnings = 0.125) {
+  apra_concord <- match.arg(apra_concord)
+  sample_file <- match.arg(sample_file)
+  s2021 <- get(sample_file, mode = "list")
+  with(s2021, {
+
+    # Assume 7% returns in accumulation, 5% in retiremtn
+    # (7.3% five years to June 2019)
+
+    wt <- first(WEIGHT)
+    if (apra_concord == "weight") {
+      wt <- r_APRA_over_ATO * wt
+    }
+    if (apra_concord == "balance") {
+      MCS_Ttl_Acnt_Bal <- r_APRA_over_ATO * MCS_Ttl_Acnt_Bal
+    }
+    r_earnings <- if_else(age_range <= 1L, r_earnings_retirement, r_earnings_accumulation)
+    earnings <- MCS_Ttl_Acnt_Bal * r_earnings
+
+    prv_xfer_bal <- pminC(MCS_Ttl_Acnt_Bal, prv_balance_cap) * r_earnings
+    prv_abv_cap <- pmax0(MCS_Ttl_Acnt_Bal - prv_balance_cap) * r_earnings
+    new_xfer_bal <- pminC(MCS_Ttl_Acnt_Bal, new_balance_cap) * r_earnings
+    new_abv_cap <- pmax0(MCS_Ttl_Acnt_Bal - new_balance_cap) * r_earnings
+    prv_earnings_tax <- effective_tax_on_earnings * if_else(age_range > 1, earnings, prv_abv_cap)
+    new_earnings_tax <- effective_tax_on_earnings * if_else(age_range > 1, earnings, new_abv_cap)
+    sum(new_earnings_tax - prv_earnings_tax) * wt
+  })
+}
+
 cat("\n")
 # Lower transfer balance cap to 500k
 # Lower transfer balance cap to 750k
@@ -163,12 +198,35 @@ cat(formatC("Uprator", width = nchar("mr - 20%")), "\t", formatC("Balance cap", 
 cat(" Costing/$bn\n")
 for (balC in c(100e3, 500e3, 750e3, 1e6)) {
   for (apraC in c("none", "balance", "weight")) {
-    for (sa_f in c("s2021_via_1718", "s2021_via_1819")) {
+    for (sa_f in c("s2021_via_1718")) {
       cat(formatC(apraC, width = nchar("mr - 20%")),
           "\t",
           formatC(scales::dollar(balC), width = nchar(" $1,000,000")),
           "\t")
-      cat(formatC(revenue_from_bal_cap(balC, sa_f, apraC) / 1e9,
+      cat(formatC(revenue_from_xfer_bal_cap(balC, sample_file = sa_f, apra_concord = apraC) / 1e9,
+                  format = "f",
+                  flag = "#",
+                  digits = 1,
+                  width = nchar(" Costing/$bn")), "\n")
+    }
+  }
+}
+
+
+cat("\n")
+# Lower transfer balance cap to 500k
+# Lower transfer balance cap to 750k
+# Lower transfer balance cap to 1m
+cat(formatC("Uprator", width = nchar("mr - 20%")), "\t", formatC("Balance cap", width = nchar(" $1,000,000")), "\t")
+cat(" Costing/$bn\n")
+for (balC in c(1.6e6, 2e6, 3.2e6)) {
+  for (apraC in c("none", "balance", "weight")) {
+    for (sa_f in c("s2021_via_1718")) {
+      cat(formatC(apraC, width = nchar("mr - 20%")),
+          "\t",
+          formatC(scales::dollar(balC), width = nchar(" $1,000,000")),
+          "\t")
+      cat(formatC(revenue_from_bal_cap(balC, sample_file = sa_f, apra_concord = apraC) / 1e9,
                   format = "f",
                   flag = "#",
                   digits = 1,
