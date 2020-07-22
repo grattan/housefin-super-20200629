@@ -1,6 +1,8 @@
 options("dplyr.summarise.inform" = FALSE)
 options(digits = 3)
 options(scipen = 99)
+options(encoding = "UTF-8")
+library(data.table)
 library(hutilscpp)
 library(taxstats)
 library(grattanCharts)
@@ -11,230 +13,11 @@ library(magrittr)
 library(grattantheme)
 library(grattandata)
 library(hutils)
+library(grattan)
 
 "%between%" <- data.table::`%between%`
-
-
-#' Stacked charts with labels at right
-#'
-#' @param .data A data frame, containing entries for \code{x}, \code{y}, and \code{fill}. \code{x} and \code{fill} must be ordered factors.
-#' @param geom The type of chart ("bar", "area").
-#' @param barwidth Passed to the \code{width} argument of \code{geom_bar}
-#' @param verbose Report the margin used (in grid:: 'lines').
-#' @param right_margin The amount of padding at right to use. The whole point of this function is to select a good right margin to allow space. But if the margin provided is wrong, it can be changed manually here.
-#' @param reverse (logical) Use the reverse palette.
-#' @param scale_fill_manual_args Arguments passed to \code{ggplot2::scale_fill_manual}.
-#' @param scale_y_args A list of arguments passed to r \code{ggplot2::scale_y_continuous}.
-#' @param x_continuous Should the x axis be continuous?
-#' @param scale_x_args A list of arguments passed to \code{ggplot2::scale_x_discrete}. If \code{x_continuous}, then the arguments passed to \code{ggplot2::scale_x_continuous}.
-#' @param coord_cartesian_args A list of arguments passed to \code{ggplot2::coord_cartesian}.
-#' @param text_family Text family for theme and geom text.
-#' @param Annotate_Args A list of list of arguments passed to \code{ggplot2::annotate}. Each element of the top-level list is an additional layer of \code{annotate}.
-#' @param theme_grattan.args Arguments passed to \code{theme_hugh}, an alias for \code{theme_grattan}. (For example, the \code{base_size}.)
-#' @param theme.args A list of arguments passed to \code{ggplot2::theme}.
-#' @param nudge_up A numeric vector to be added every text y-coordinate.
-#' @param nudge_right Move text right in units of \code{x}.
-#' @param extra_left_spaces Number of space characters \code{" "} preceding the text labels. Extra space characters are added before every newline.
-#' @return A chart with the labels in the right gutter
-#' @importFrom graphics strwidth
-#' @examples
-#' library(data.table)
-#' dat <- data.table::CJ(
-#'   x = factor(1:10, ordered = TRUE),
-#'   fill = factor(c("A long but not\ntoo long label", letters[2:3]),
-#'                 levels = c("A long but not\ntoo long label", letters[2:3]),
-#'                 ordered = TRUE)
-#' )
-#' dat$y <- abs(rnorm(1:nrow(dat)))
-#'
-#' stacked_bar_with_right_labels(dat)
-#'
-#'
-#' @export
-
-
-
-stacked_bar_with_right_labels <- function(.data,
-                                          geom = "bar",
-                                          barwidth,
-                                          verbose = FALSE,
-                                          right_margin = 0.5,
-                                          reverse = FALSE,
-                                          scale_fill_manual_args,
-                                          scale_y_args,
-                                          x_continuous = FALSE,
-                                          scale_x_args,
-                                          coord_cartesian_args,
-                                          text_family = NULL,
-                                          Annotate_Args,
-                                          theme_grattan.args,
-                                          theme.args,
-                                          nudge_up = 0,
-                                          nudge_right = 0.5,
-                                          extra_left_spaces = 0L){
-  stopifnot(all(c("x", "y", "fill") %in% names(.data)))
-  x = y = fill = text.label = text.x = text.y = NULL
-  if(!is.factor(.data$fill) || !is.ordered(.data$fill)){
-    stop("'fill' must be an ordered factor.")
-  }
-  if (!x_continuous){
-    if (!is.factor(.data$x) || !is.ordered(.data$x)){
-      stop("'x' must be an ordered factor.")
-    }
-  } else {
-    if (!is.numeric(.data$x)){
-      stop("x must be numeric")
-    }
-  }
-  if (is.null(text_family)) {
-    if (requireNamespace("sysfonts", quietly = TRUE) &&
-        "helvet" %in% sysfonts::font_families()) {
-      text_family = "helvet"
-    } else {
-      text_family = ""
-    }
-  }
-
-
-  .plot.data <-
-    .data %>%
-    as.data.table %>%
-    # our label should only appear at the last x
-    .[, text.label := if_else(x == max(x),
-                              paste0(paste0(rep(" ", extra_left_spaces), collapse = ""),
-                                     gsub("\n",
-                                          # Add extra white space (push to right margin)
-                                          paste0("\n", paste0(rep(" ", extra_left_spaces), collapse = "")),
-                                          as.character(fill),
-                                          fixed = TRUE)),
-                              NA_character_)] %>%
-    # it should be as high as the corresponding bar:
-    # all the way up the previous, then half of the corresponding height
-    setorder(-fill) %>%
-    .[, text.y := -y/2 + cumsum(y) + nudge_up, by = x] %>%
-    .[, text.x := max(as.numeric(.data$x)) + nudge_right]
-
-
-  label_max_width <-
-    # longest spell between '\n <---> \n'
-    strsplit(as.character(unique(.data$fill)), split = "\n") %>%
-    unlist %>%
-    # actual character size in bold `Arial'
-    strwidth(., units = "inches", font = 2, family = "sans") %>%
-    max
-
-  # To convert to lines, use "X" as approximation
-  eX <- strwidth("X", units = "inches")
-  # 1.01 actually seems too wide for Helvetica.
-  label_max_width <- 1.00 * label_max_width / eX
-  if (verbose){
-    message('I chose ', label_max_width, ' for the right margin.\n',
-            'If my choice of margin is unsuitable for the label,\n',
-            'you can use\n',
-            '  right_margin = ',
-            '\nas a replacement for ', label_max_width, '\n',
-            'It is my job to select a good margin; so please\n',
-            'report any bad choices of mine as a bug.')
-  }
-
-  ## Need to check whether the texts will overlap
-
-  if (geom == "bar"){
-    if (missing(barwidth)){
-      p <-
-        grplot(.plot.data, reverse = reverse) +
-        theme_hugh(base_size = 18, base_family = text_family) +
-        ggplot2::geom_bar(ggplot2::aes(x = x, y = y, fill = fill),
-                          color = "white",
-                          stat = "identity") +
-        ggplot2::geom_text(ggplot2::aes(label = text.label,
-                                        x = text.x,
-                                        y = text.y,
-                                        colour = fill),
-                           na.rm = TRUE,
-                           hjust = 0,
-                           lineheight = 0.9,
-                           family = text_family,
-                           size = 18/(14/5),
-                           fontface = "bold")
-    } else {
-      p <-
-        grplot(.plot.data, reverse = reverse) +
-        theme_hugh(base_size = 18, base_family = text_family) +
-        ggplot2::geom_bar(ggplot2::aes(x = x, y = y, fill = fill),
-                          stat = "identity",
-                          color = "white",
-                          width = barwidth) +
-        ggplot2::geom_text(ggplot2::aes(label = text.label,
-                                        x = text.x,
-                                        y = text.y,
-                                        colour = fill),
-                           na.rm = TRUE,
-                           hjust = 0,
-                           lineheight = 0.9,
-                           family = text_family,
-                           size = 18/(14/5),
-                           fontface = "bold")
-    }
-    if (!missing(scale_fill_manual_args)){
-      if (!missing(reverse)){
-        warning("Both 'scale_fill_manual_args' and 'reverse' provided; 'reverse' will be ignored.")
-      }
-      p <- p + do.call(ggplot2::scale_fill_manual, args = scale_fill_manual_args)
-      # To match with the text labels!
-      p <- p + do.call(ggplot2::scale_color_manual, args = scale_fill_manual_args)
-    }
-
-    if (!missing(scale_x_args)){
-      if (x_continuous){
-        p <- p + do.call(ggplot2::scale_x_continuous, args = scale_x_args)
-      } else {
-        p <- p + do.call(ggplot2::scale_x_discrete, args = scale_x_args)
-      }
-    }
-
-    if (!missing(scale_y_args)){
-      p <- p + do.call(ggplot2::scale_y_continuous, args = scale_y_args)
-    }
-
-    if (!missing(coord_cartesian_args)){
-      p <- p + do.call(ggplot2::coord_cartesian, args = coord_cartesian_args)
-    }
-
-    if (!missing(Annotate_Args)){
-      for (aa in seq_along(Annotate_Args)){
-        p <- p + do.call(ggplot2::annotate, args = Annotate_Args[[aa]])
-      }
-      rm(aa)
-    }
-
-    if (!missing(theme_grattan.args)){
-      p <- p + do.call(theme_hugh, theme_grattan.args)
-    }
-
-    if (missing(right_margin)){
-      p <- p + ggplot2::theme(plot.margin = grid::unit(c(0.7, label_max_width, 0.5, 0),
-                                                       "lines"))
-    } else {
-      p <- p + ggplot2::theme(plot.margin = grid::unit(c(0.7, right_margin, 0.5, 0),
-                                                       "lines"))
-    }
-
-    if (!missing(theme.args)){
-      p <- p + do.call(theme, theme.args)
-    }
-  } else {
-    stop("You've asked for a geom which is not supported.")
-  }
-  grid::grid.newpage()
-  gt <- ggplot2::ggplot_gtable(ggplot2::ggplot_build(p))
-  gt$layout$clip[gt$layout$name == "panel"] <- "off"
-  grid::grid.draw(gt)
-}
-
-
-
-
+comma <- function(x) prettyNum(x, big.mark = ",")
+p0 <- paste0
 
 s1718 <-
   tryCatch(read_microdata("ato_2018_sample_file.csv", fast = TRUE),
@@ -253,7 +36,7 @@ s2021 <-
                               div293_threshold = 250e3)
 
 TaxExpenditure2021 <-
-s1718 %>%
+  s1718 %>%
   project_to(to_fy = "2020-21",
              fy.year.of.sample.file = "2017-18",
              lf.series = 0,
@@ -265,7 +48,9 @@ s1718 %>%
                             prv_age_based_cap = FALSE,
                             new_contr_tax = "mr - 0%",
                             prv_div293_threshold = 250e3,
-                            new_div293_threshold = 250e3)
+                            new_div293_threshold = Inf)
+
+
 grattan_save_all <- function(filename, object) {
   grattantheme::grattan_save(filename = filename,
                              object = object,
@@ -281,6 +66,7 @@ grattan_save_all(provide.file("Figure-3-1/Figure31.pdf"), {
     filter(old_concessional_contributions > 0) %>%
     mutate_ntile("old_Taxable_Income", n = 10L) %>%
 
+
     group_by(old_Taxable_IncomeDecile) %>%
     summarise(TotalBenefits = sum(new_revenue - prv_revenue)) %>%
     mutate(Decile = factor(old_Taxable_IncomeDecile)) %>%
@@ -289,8 +75,15 @@ grattan_save_all(provide.file("Figure-3-1/Figure31.pdf"), {
     geom_col() +
     scale_y_continuous_grattan() +
     theme_grattan() +
-    ggtitle("Superannuation tax breaks primarily benefit high-income earners",
-            subtitle = "Percentage of total tax breaks")
+    labs(title = "Superannuation tax breaks primarily benefit high-income earners",
+         subtitle = "Percentage of total tax breaks",
+         caption = paste0("Notes: Value of tax breaks calculated against a comprehensive",
+                          "income tax benchmark. Deciles sorted by taxable income.",
+                          "Projections to 2020-21 assume 2% wage growth and 0% ",
+                          "growth in the number of taxfilers from 2019-20 to 2020-21 ",
+                          "Only includes taxpayers that made a pre-tax contribution ",
+                          "in that year.",
+                          "\nSource: ATO 2017-18 2% sample file"))
 })
 
 # Figure 4.3
@@ -315,12 +108,34 @@ grattan_save_all(provide.file("Figure-4-3/Figure43.pdf"), {
               avg_personal_deductible_contributions = mean(personal_deductible_contributions),
               avg_non_concessional_contributions = mean(non_concessional_contributions)) %>%
     pivot_longer(cols = grep("^avg", names(.), value = TRUE)) %>%
-    mutate(name = trim_common_affixes(name)) %>%
+    mutate(name = trim_common_affixes(name),
+           name = sub("_", "-", name)) %>%
     ggplot(aes(x = TaxBracket, y = value)) +
     geom_col(aes(fill = name)) +
     theme_grattan() +
     grattan_fill_manual() +
-    scale_y_continuous_grattan(labels = grattanCharts::grattan_dollar)
+    scale_y_continuous_grattan(labels = grattanCharts::grattan_dollar) +
+#
+#     scale_x_continuous(breaks = c(0.5, 1.5, 2.5, 3.5, 4.5),
+#                        labels = letters[1:4]) +
+    theme(legend.position = c(0, 1),
+          legend.justification = c(0, 1),
+          legend.direction = "vertical") +
+    labs(x = "Taxable income bracket",
+         title = "Those on high incomes make larger voluntary contributions, increasing the value of contributions tax breaks",
+         subtitle = "Average superannuation contributions (2020-21)",
+         caption = paste0("Notes: ",
+                          "Projections to 2020-21 assume 2% wage growth and 0% ",
+                          "growth in the number of taxfilers from 2019-20 to 2020-21. ",
+                          "SG = super guarantee contributions, assumed to be ",
+                          "employer contributions less reportable employer super ",
+                          "contributions; ",
+                          "salary-sacrifice = reportable employer super contributions; ",
+                          "personal-deductible = non-employer superannuation contributions; ",
+                          "non-concessional = nonnegative component of personal contributions ",
+                          "less non-employer super contributions.",
+                          "\n",
+                          "Source: ATO 2017-18 2% sample file"))
 })
 
 # Figure 4.4
@@ -368,8 +183,13 @@ grattan_save_all(provide.file("Figure-4-4/Figure44.pdf"), {
               na.rm = TRUE) +
     scale_x_discrete(name = "Taxable income decile", expand = expansion(add = c(0.5, 2.5))) +
     scale_y_continuous_grattan(labels = scales::dollar) +
-    ggtitle("Contributions among over 50s are heavily skewed towards high-income earners",
-            subtitle = "Average concessional contribution for taxfilers over 50 (2020-21)")
+    labs(title = "Contributions among over 50s are heavily skewed towards high-income earners",
+         subtitle = "Average concessional contribution for taxfilers over 50 (2020-21)",
+         caption = p0("Notes: ",
+                      "Projections to 2020-21 assume 2% wage growth and 0% ",
+                      "growth in the number of taxfilers from 2019-20 to 2020-21. ",
+                      "Taxable income deciles based on 50+ taxfilers only. ", "\n",
+                      "Source: ATO 2017-18 2% sample file"))
 })
 # Figure 4.5
 grattan_save_all(provide.file("Figure-4-5/Figure45.pdf"), {
@@ -404,7 +224,17 @@ grattan_save_all(provide.file("Figure-4-5/Figure45.pdf"), {
           axis.title = element_blank(),
           panel.grid = element_blank(),
           axis.line = element_blank()) +
-    grattan_fill_manual(n = 2)
+    grattan_fill_manual(n = 2) +
+    labs(title = "Voluntary pre-tax contributions are mostly made by those who are older and on high incomes",
+         subtitle = "Percentage of voluntary pre-tax contributions, (2020-21)",
+         caption = p0("Notes: ",
+                      "Projections to 2020-21 assume 2% wage growth and 0% ",
+                      "growth in the number of taxfilers from 2019-20 to 2020-21. ",
+                      "Voluntary pre-tax contributions means concessional contributions ",
+                      "less SG contributions. ",
+                      "\n",
+                      "Source: ATO 2017-18 2% sample file"))
+
 })
 # Figure 4.6: but for 11k (rather than 10k)
 grattan_save_all(provide.file("Figure-4-6/Figure46.pdf"), {
@@ -431,8 +261,15 @@ grattan_save_all(provide.file("Figure-4-6/Figure46.pdf"), {
     theme(legend.position = c(1, 1),
           legend.justification = c(1, 1)) +
     grattan_fill_manual(n = 2) +
-    ggtitle("Few people other than high-income earners contribute over $11,000 a year",
-            subtitle = paste("Number of taxfilers with more than $11,000 in concessional contributions, 2020-21"))
+    labs(title = "Few people other than high-income earners contribute over $11,000 a year",
+         subtitle = paste("Number of taxfilers with more than $11,000 in concessional contributions, 2020-21"),
+         caption = p0("Notes: ",
+                      "Projections to 2020-21 assume 2% wage growth and 0% ",
+                      "growth in the number of taxfilers from 2019-20 to 2020-21. ",
+                      "Non-voluntary component means employer contributions less ",
+                      "reportable employer super contributions. ",
+                      "\n",
+                      "Source: ATO 2017-18 2% sample file"))
 
 })
 # Figure 4.7
@@ -477,7 +314,11 @@ grattan_save_all(provide.file("Figure-4-7/Figure47.pdf"), {
           axis.title = element_blank(),
           panel.grid = element_blank(),
           axis.line = element_blank()) +
-    grattan_fill_manual(n = 2)
+    grattan_fill_manual(n = 2) +
+    labs(title = "",
+         subtitle = "Value of pre-tax voluntary contributions to superannuation in excess of
+$11,000 in a year, 2020-21",
+         caption = "Source: ATO 2017-18 2% sample file")
 })
 
 # Figure 5.1
@@ -530,8 +371,9 @@ grattan_save_all(provide.file("Figure-5-1/Figure51.pdf"), {
           legend.direction = "vertical") +
     guides(fill = guide_legend("Age")) +
     grattan_fill_manual(n = 2) +
-    ggtitle("Voluntary post-tax contributions are mostly made by those who are older and on high incomes",
-            subtitle = "Percentage of voluntary post-tax contributions, 2020-21")
+    labs(title = "Voluntary post-tax contributions are mostly made by those who are older and on high incomes",
+         subtitle = "Percentage of voluntary post-tax contributions, 2020-21",
+         caption = "Source: ATO 2017-18 2% sample file")
 
 })
 # Figure 5.2
@@ -572,21 +414,65 @@ grattan_save_all(provide.file("Figure-5-2/Figure52.pdf"), {
               position = position_identity(),
               na.rm = TRUE) +
     scale_color_identity() +
-    scale_fill_manual(values = c(grattantheme::grattan_lightyellow, grattantheme::grattan_yellow,
+    scale_fill_manual(values = c("white", grattantheme::grattan_yellow,
                                  grattantheme::grattan_lightorange, grattantheme::grattan_darkorange,
                                  grattantheme::grattan_red, grattantheme::grattan_darkred,
                                  "black")) +
     theme_grattan() +
     theme(axis.title.x = element_blank()) +
-    scale_y_continuous_grattan(labels = function(x) paste0(as.integer(x * 100), "%"))
+    scale_y_continuous_grattan(labels = function(x) paste0(as.integer(x * 100), "%")) +
+    labs(title = "Voluntary post-tax contributions are made to high-balance accounts",
+         subtitle = "Share of taxpayers and post-tax contributions, by existing superannuation balance",
+         caption = p0("Notes: ",
+                      "Projections to 2020-21 assume 2% wage growth and 0% ",
+                      "growth in the number of taxfilers from 2019-20 to 2020-21. ",
+                      "Post-tax contributions equals personal contributions less ",
+                      "non-employer super contributions.",
+                      "",
+                      "\n",
+                      "Source: ATO 2017-18 2% sample file"))
 })
 
 # Figure 6.1
 # Superannuation earnings by 60+ year old, 2015-16
-# grattan_save_all(provide.file("Figure-6-1/Figure61.pdf"), {
-#   s2021 %>%
-#
-# })
+grattan_save_all(provide.file("Figure-6-1/Figure61.pdf"), {
+  s2021 %>%
+    filter(age_range <= 2) %>%
+    mutate(earnings_if_taxed = MCS_Ttl_Acnt_Bal * 0.05 * (1 - 0.09),
+           earnings_tax_concession = MCS_Ttl_Acnt_Bal * 0.05 * 0.09) %>%
+    mutate(Total_Income = Tot_inc_amt + MCS_Ttl_Acnt_Bal * 0.05,
+           Total_Income_Decile = factor(weighted_ntile(Total_Income, n = 10L))) %>%
+    group_by(Total_Income_Decile) %>%
+    summarise(avgSuperEarnings_if_taxed = mean(earnings_if_taxed),
+              avgEarningsConcession = mean(earnings_tax_concession)) %>%
+    pivot_longer(grep("^avg", names(.), value = TRUE)) %>%
+    mutate(name = if_else(name %ein% "avgEarningsConcession",
+                          "Earnings concession",
+                          "Earnings if taxed")) %>%
+    ggplot(aes(x = Total_Income_Decile,
+               y = value,
+               fill = name)) +
+    geom_col() +
+    grattan_fill_manual(n = 2, palette = "dark") +
+    theme_grattan() +
+    theme(legend.position = c(0, 1),
+          legend.justification = c(0, 1),
+          legend.direction = "horizontal") +
+    grattan_y_continuous(label = grattan_dollar) +
+    labs(subtitle = "Superannuation earnings per 60+ year old, 2020-21",
+         x = "Total income decile",
+         caption = p0("Notes: ",
+                      "Projections to 2020-21 assume 2% wage growth and 0% ",
+                      "growth in the number of taxfilers from 2019-20 to 2020-21.",
+                      "Earnings if taxed equals 5% of balance multiplied by 91% ",
+                      "(i.e. assuming a 5% rate of return and a 9% average effective ",
+                      "tax rate on earnings) ",
+                      "Earnings concession equals 5% of 9% of the balance",
+                      "for symmetric reasons.",
+                      "\n",
+                      "Source: ATO 2017-18 2% sample file."))
+
+})
 
 
 # Figure 6.2
@@ -611,12 +497,12 @@ grattan_save_all(provide.file("Figure-6-2/Figure62.pdf"), {
     # as proxy for true taxfree threshold
     mutate(taxfree_threshold = Mode(Taxable_Income[tax %between% c(1, 100)]),
            # This is the amount available if earnings were taxed at 15%
-           minTaxable_Income_blw_15pc = min(Taxable_Income[MarginalRate > 0.15])) %>%
+           minTaxable_Income_blw_15pc = min(Taxable_Income[MarginalRate > 0.125])) %>%
     ungroup %>%
     mutate(unused_taxfree_threshold = pmax0(taxfree_threshold - Taxable_Income),
            unused_income_blw_15pc = pmax0(minTaxable_Income_blw_15pc - Taxable_Income)) %>%
     mutate(earnings = 0.05 * MCS_Ttl_Acnt_Bal,
-           earnings_tax = 0.15 * earnings,
+           earnings_tax = 0.125 * earnings,
 
            # Allow earnings to be transferred to Taxable Income only to the point
            # minTaxable_Income_blw_15pc -- any more and the personal income tax
@@ -624,14 +510,14 @@ grattan_save_all(provide.file("Figure-6-2/Figure62.pdf"), {
            # 'transfer from super earnings to personal income tax'
 
            earnings_w_behaviour_change = pmax0(earnings - unused_income_blw_15pc),
-           earnings_tax_w_behaviour_change = 0.15 * earnings_w_behaviour_change,
+           earnings_tax_w_behaviour_change = 0.125 * earnings_w_behaviour_change,
            Taxable_Income_w_behaviour_change = Taxable_Income + pminV(earnings, unused_income_blw_15pc),
 
            # Same thing except using earnings - 20k as the earnings at risk
            earnings_abv_20k = pmax0(earnings - 20e3),
-           earnings_tax_abv_20k = 0.15 * earnings_abv_20k,
+           earnings_tax_abv_20k = 0.125 * earnings_abv_20k,
            earnings_w_behaviour_change_20k_threshold = pmax0(earnings_abv_20k - unused_income_blw_15pc),
-           earnings_tax_w_behaviour_change_20k_threshold = 0.15 * earnings_w_behaviour_change_20k_threshold,
+           earnings_tax_w_behaviour_change_20k_threshold = 0.125 * earnings_w_behaviour_change_20k_threshold,
            Taxable_Income_w_behaviour_change_20k_threshold = Taxable_Income + pminV(earnings_abv_20k, unused_income_blw_15pc),
 
 
@@ -652,24 +538,238 @@ grattan_save_all(provide.file("Figure-6-2/Figure62.pdf"), {
     mutate(Decile = factor(TotalIncomePlusEarningsDecile),
            name = trim_common_affixes(name),
            name = Switch(name,
-                         "ante_behaviour_change" = "15% tax on all super earnings",
-                         "post_behaviour_change" = "15% tax on all super earnings after behaviour change",
+                         "ante_behaviour_change" = "15% tax on super earnings",
+                         "post_behaviour_change" = "15% tax on super earnings after behaviour change",
                          "over20k" = "15% tax on super earnings over $20,000",
-                         "over20k_post_behaviour_change" = "15% tax on super earnings over $20,000\nafter behaviour change",
+                         "over20k_post_behaviour_change" = "15% tax on super earnings over $20,000 after behaviour change",
                          DEFAULT = ""),
            name = forcats::fct_inorder(name)) %>%
     ggplot(aes(x = Decile, y = value, fill = name)) +
     geom_col(position = position_dodge()) +
-    scale_y_continuous_grattan(labels = grattan_dollar) +
+    scale_y_continuous_grattan(labels = grattan_dollar, breaks = c(0, 5e3, 10e3)) +
     theme_grattan() +
     theme(legend.position = c(0, 1),
           legend.justification = c(0, 1),
           legend.direction = "vertical") +
     grattan_fill_manual(n = 4, palette = "dark") +
-    ggtitle("A tax on earnings in retirement would mostly affect those with higher incomes",
-            subtitle = "Average additional tax paid by 60+ year olds under reform proposals, by total income decile (including super earnings), 2020-21")
+    labs(title = "A tax on earnings in retirement would mostly affect those with higher incomes",
+         subtitle = "Average additional tax paid by 60+ year olds under reform proposals, by total income decile (including super earnings), 2020-21",
+         caption = p0("Note: Earnings estimated as 5% of super balances. ",
+                      "Effective earnings tax assumed to be 12.5%. ",
+                      "Behavioural response assumed to be that individuals whose ",
+                      "taxable income is below either the tax-free threshold or ",
+                      "the taxable income at which most people's marginal tax rate ",
+                      "exceeds 12.5% would transfer as much super earnings into ",
+                      "their taxable income as would reduce their tax. ",
+                      "The effective tax-free threshold is the most common taxable income ",
+                      "in which people of that age and partner status pay between $1 and $100 ",
+                      "income tax. The threshold for the 12.5% marginal rate is the minimum ",
+                      "taxable income at which the marginal tax rate is greater than 12.5% for ",
+                      "that age and partner status. ",
+                      "\n",
+                      "Source: ATO 2017-18 2% sample file."))
 })
-# Figure 6.2
+
+
+# Figure BSS-4
+# Projected number of individuals in 2019-20 making pre-tax contributions of more
+# than $25,000
+grattan_save_all("Figure-BSS-4/Figure-BSS-4.pdf", {
+  s2021 %>%
+    select(Gender, Taxable_Income, concessional_contributions, WEIGHT) %>%
+    mutate_ntile(Taxable_Income, n = 10L) %>%
+    as_tibble %>%
+    filter(concessional_contributions > 11e3) %>%
+    group_by(Gender, Taxable_IncomeDecile) %>%
+    summarise(nTaxfilers = sum(WEIGHT)) %>%
+    mutate(Sex = if_else(Gender == 0, "Male", "Female"),
+           Taxable_IncomeDecile = factor(Taxable_IncomeDecile))  %>%
+    ggplot(aes(x = Taxable_IncomeDecile, y = nTaxfilers, fill = Sex)) +
+    geom_col() +
+    theme_grattan() +
+    grattan_fill_manual(n = 2, palette = "dark") +
+    grattan_y_continuous(labels = comma) +
+    facet_wrap(~Sex)
+})
+
+
+# Breakdown of CIT v pre-2015 v proposed
+grattan_save_all("Figure-concessional-breakdown/Figure-concessional-breakdown.pdf", {
+  list("2015-16 reforms" = {
+    s1718 %>%
+      project(h = 3L,
+              lf.series = 0,
+              wage.series = 0.02) %>%
+      model_new_caps_and_div293(fy.year = "2020-21",
+                                prv_cap = 30e3,
+                                prv_cap2 = 35e3,
+                                prv_age_based_cap = TRUE,
+                                prv_cap2_age = 49,
+                                prv_div293_threshold = 300e3,
+
+                                new_cap = 25e3,
+                                new_age_based_cap = FALSE,
+                                new_div293_threshold = 250e3) %>%
+      mutate_ntile("Taxable_Income", n = 10L) %>%
+      as_tibble %>%
+      mutate(tax_breaks_value = new_revenue - prv_revenue) %>%
+      group_by(Taxable_IncomeDecile) %>%
+      summarise(ContributionsTaxBreak_bn = sum(tax_breaks_value * WEIGHT) / 1e9)
+  },
+  "Proposed" = {
+    s1718 %>%
+      project(h = 3L,
+              lf.series = 0,
+              wage.series = 0.02) %>%
+      model_new_caps_and_div293(fy.year = "2020-21",
+                                prv_cap = 25e3,
+                                prv_age_based_cap = FALSE,
+                                prv_div293_threshold = 250e3,
+
+                                new_cap = 11e3,
+                                new_age_based_cap = FALSE,
+                                new_div293_threshold = 200e3) %>%
+      mutate_ntile("Taxable_Income", n = 10L) %>%
+      as_tibble %>%
+      mutate(tax_breaks_value = new_revenue - prv_revenue) %>%
+      group_by(Taxable_IncomeDecile) %>%
+      summarise(ContributionsTaxBreak_bn = sum(tax_breaks_value * WEIGHT) / 1e9)
+  },
+  "Remaining concessions" = {
+    s1718 %>%
+      project(h = 3L,
+              lf.series = 0,
+              wage.series = 0.02) %>%
+      model_new_caps_and_div293(fy.year = "2020-21",
+                                prv_cap = 11e3,
+                                prv_age_based_cap = FALSE,
+                                prv_div293_threshold = 200e3,
+
+                                new_cap = 0,
+                                new_age_based_cap = FALSE,
+                                new_contr_tax = "mr - 0%",
+                                new_div293_threshold = Inf) %>%
+      mutate_ntile("Taxable_Income", n = 10L) %>%
+      as_tibble %>%
+      mutate(tax_breaks_value = new_revenue - prv_revenue) %>%
+      group_by(Taxable_IncomeDecile) %>%
+      summarise(ContributionsTaxBreak_bn = sum(tax_breaks_value * WEIGHT) / 1e9)
+  }) %>%
+    rbindlist(idcol = "Policy") %>%
+    mutate(Taxable_IncomeDecile = factor(Taxable_IncomeDecile),
+           Policy = forcats::fct_inorder(Policy)) %>%
+    ggplot(aes(x = Taxable_IncomeDecile,
+               y = ContributionsTaxBreak_bn,
+               fill = Policy)) +
+    geom_col() +
+    theme_grattan() +
+    grattan_fill_manual(n = 5, palette = "dark") +
+    theme(legend.position = c(0, 1),
+          legend.justification = c(0, 1),
+          legend.direction = "vertical") +
+    labs(x = "Taxable income decile",
+         subtitle = "Value of tax concessions ($bn, 2020-21)",
+         caption = "Note: Comprehensive income tax benchmark. \nSource: ATO 2017-18 2% sample file.")
+})
+
+
+revenue_from_bal_cap <- function(balance_cap,
+                                 sample_file = c("s2021_via_1718", "s2021_via_1819"),
+                                 apra_concord = c("none", "balance", "weight"),
+                                 r_earnings_retirement = 0.05,
+                                 r_earnings_accumulation = 0.07,
+                                 effective_tax_on_earnings = 0.10,
+                                 p_excess_earnings_cgt = 0.8) {
+  apra_concord <- match.arg(apra_concord)
+  sample_file <- match.arg(sample_file)
+  with(copy(s2021), {
+
+    # Assume 7% returns in accumulation, 5% in retiremtn
+    # (7.3% five years to June 2019)
+
+    wt <- first(WEIGHT)
+    if (apra_concord == "weight") {
+      wt <- r_APRA_over_ATO * wt
+    }
+    if (apra_concord == "balance") {
+      MCS_Ttl_Acnt_Bal <- r_APRA_over_ATO * MCS_Ttl_Acnt_Bal
+    }
+    r_earnings <- if_else(age_range <= 1L, r_earnings_retirement, r_earnings_accumulation)
+
+    old_earnings <- r_earnings * MCS_Ttl_Acnt_Bal
+    old_earnings_tax <- (age_range > 1) * effective_tax_on_earnings * old_earnings
+    old_net_earnings_post_tax <- old_earnings - old_earnings_tax
+    new_earnings <- r_earnings * pminC(MCS_Ttl_Acnt_Bal, balance_cap)
+    new_earnings_tax <- (age_range > 1) * effective_tax_on_earnings * new_earnings
+    extra_taxable_income <- r_earnings * pmax0(MCS_Ttl_Acnt_Bal - balance_cap)
+    extra_taxable_income <-
+      p_excess_earnings_cgt * extra_taxable_income * 0.5 +  # CGT
+      (1 - p_excess_earnings_cgt) * extra_taxable_income
+    #
+    old_earnings2021 <- sum(old_net_earnings_post_tax) * wt
+    avg_growth <- mean(r_earnings)
+    old_earnings1819 <- (old_earnings2021) / (avg_growth ^ 2)
+    net_old_earnings1819 <- sum(old_net_earnings_post_tax) * wt
+
+
+    NewTaxableIncome <- extra_taxable_income + Taxable_Income
+
+    new_tax <- income_tax(NewTaxableIncome, "2020-21", .dots.ATO = s2021)
+    old_tax <- income_tax(Taxable_Income, "2020-21", .dots.ATO = s2021)
+    new_earnings_tax <- (age_range > 1) * effective_tax_on_earnings * new_earnings
+    old_earnings_tax <- (age_range > 1) * effective_tax_on_earnings * old_earnings
+
+    delta <- new_tax - old_tax + new_earnings_tax - old_earnings_tax
+
+    delta
+  })
+}
+
+revenue_from_xfer_bal_cap <- function(new_balance_cap,
+                                      prv_balance_cap = 1.6e6,
+                                      sample_file = c("s2021_via_1718", "s2021_via_1819"),
+                                      apra_concord = c("none", "balance", "weight"),
+                                      r_earnings_retirement = 0.05,
+                                      r_earnings_accumulation = 0.07,
+                                      effective_tax_on_earnings = 0.1) {
+  apra_concord <- match.arg(apra_concord)
+  sample_file <- match.arg(sample_file)
+  s2021 <- get(sample_file, mode = "list")
+  # Only care about over 60s for the difference
+  s2021 <- s2021[age_range <= 2]
+
+  with(s2021, {
+
+    # Assume 7% returns in accumulation, 5% in retiremtn
+    # (7.3% five years to June 2019)
+
+    wt <- first(WEIGHT)
+    if (apra_concord == "weight") {
+      wt <- r_APRA_over_ATO * wt
+    }
+    if (apra_concord == "balance") {
+      MCS_Ttl_Acnt_Bal <- r_APRA_over_ATO * MCS_Ttl_Acnt_Bal
+    }
+    r_earnings <- if_else(age_range <= 1L, r_earnings_retirement, r_earnings_accumulation)
+    earnings <- MCS_Ttl_Acnt_Bal * r_earnings
+
+
+    # Calculate earnings from excess amount
+    prv_abv_cap <- pmax0(MCS_Ttl_Acnt_Bal - prv_balance_cap) * r_earnings
+    new_abv_cap <- pmax0(MCS_Ttl_Acnt_Bal - new_balance_cap) * r_earnings
+
+    # Excess earnings tax
+    prv_earnings_tax <- effective_tax_on_earnings * prv_abv_cap
+    new_earnings_tax <- effective_tax_on_earnings * new_abv_cap
+
+
+    new_earnings_tax - prv_earnings_tax
+  })
+}
+
+
+
+
 
 
 
