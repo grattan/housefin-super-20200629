@@ -18,21 +18,6 @@ packageVersion("grattan") >= "1.9.0.0"
 
 s1718 <- fread("../taxstats1718/2018_sample_file.csv")
 s1819 <- fread("../SampleFile1819/sample_file_1819.tsv")
-tax202122 <- project(s1718,
-                     h = 4L,
-                     differentially_uprate_Sw = FALSE,
-                     fy.year.of.sample.file = "2017-18",
-                     lf.series = 0,
-                     .recalculate.inflators = TRUE,
-                     check_fy_sample_file = FALSE)
-tax202122A <-
-  model_new_caps_and_div293(tax202122,
-                            fy.year = "2019-20",
-                            new_cap = 20e3,
-                            prv_cap = 25e3,
-                            new_contr_tax = "mr - 15%",
-                            new_age_based_cap = FALSE,
-                            prv_age_based_cap = FALSE)
 
 s2021_via_1718 <-
   s1718 %>%
@@ -40,6 +25,7 @@ s2021_via_1718 <-
           differentially_uprate_Sw = FALSE,
           fy.year.of.sample.file = "2017-18",
           lf.series = 0,
+          wage.series = 0,
           .recalculate.inflators = TRUE,
           check_fy_sample_file = FALSE)
 s2021_via_1819 <-
@@ -279,7 +265,15 @@ CJ(balC = c(1.6e6, 2e6, 3.2e6),
   fwrite("Costing-RiceWarner.csv")
 
 
-
+# No drawdown earnings concession
+s2021_via_1718[age_range <= 2] %>%
+  .[, sum(new_earnings_tax = 0.125 * 0.05 * MCS_Ttl_Acnt_Bal * WEIGHT)] %>%
+  divide_by(1e9) %>%
+  formatC(format = "f",
+          flag = "#",
+          digits = 1,
+          width = nchar(" Costing/$bn")) %>%
+  cat("\n")
 
 
 
