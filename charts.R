@@ -25,6 +25,59 @@ s1718 <-
              readr::read_csv("~/taxstats1718/2018_sample_file.csv")
            })
 
+
+
+earnings_tax_concession <- function(.sample_file,
+                                    apra_concord = c("none", "balance", "weight"),
+                                    r_earnings_retirement = 0.05,
+                                    r_earnings_accumulation = 0.07,
+                                    effective_tax_on_earnings = 0.10,
+                                    p_excess_earnings_cgt = 0.8) {
+  apra_concord <- match.arg(apra_concord)
+  s2021 <- copy(.sample_file)
+  with(s2021, {
+
+    # Assume 7% returns in accumulation, 5% in retiremtn
+    # (7.3% five years to June 2019)
+
+    wt <- first(WEIGHT)
+    if (apra_concord == "weight") {
+      wt <- r_APRA_over_ATO * wt
+    }
+    if (apra_concord == "balance") {
+      MCS_Ttl_Acnt_Bal <- r_APRA_over_ATO * MCS_Ttl_Acnt_Bal
+    }
+    r_earnings <- if_else(age_range <= 1L, r_earnings_retirement, r_earnings_accumulation)
+
+    old_earnings <- r_earnings * MCS_Ttl_Acnt_Bal
+    old_earnings_tax <- (age_range > 1) * effective_tax_on_earnings * old_earnings
+    old_net_earnings_post_tax <- old_earnings - old_earnings_tax
+    new_earnings <- r_earnings * pminC(MCS_Ttl_Acnt_Bal, balance_cap)
+    new_earnings_tax <- (age_range > 1) * effective_tax_on_earnings * new_earnings
+    extra_taxable_income <- r_earnings * pmax0(MCS_Ttl_Acnt_Bal - balance_cap)
+    extra_taxable_income <-
+      p_excess_earnings_cgt * extra_taxable_income * 0.5 +  # CGT
+      (1 - p_excess_earnings_cgt) * extra_taxable_income
+    #
+    old_earnings2021 <- sum(old_net_earnings_post_tax) * wt
+    avg_growth <- mean(r_earnings)
+    old_earnings1819 <- (old_earnings2021) / (avg_growth ^ 2)
+    net_old_earnings1819 <- sum(old_net_earnings_post_tax) * wt
+
+
+    NewTaxableIncome <- extra_taxable_income + Taxable_Income
+
+    new_tax <- income_tax(NewTaxableIncome, "2020-21", .dots.ATO = s2021)
+    old_tax <- income_tax(Taxable_Income, "2020-21", .dots.ATO = s2021)
+    new_earnings_tax <- (age_range > 1) * effective_tax_on_earnings * new_earnings
+    old_earnings_tax <- (age_range > 1) * effective_tax_on_earnings * old_earnings
+
+    delta <- new_tax - old_tax + new_earnings_tax - old_earnings_tax
+
+    sum(delta) * wt
+  })
+}
+
 s2021 <-
   s1718 %>%
   project_to(to_fy = "2020-21",
@@ -33,6 +86,7 @@ s2021 <-
              r_super_balance = 1.07) %>%
   apply_super_caps_and_div293(cap = 25e3,
                               age_based_cap = FALSE,
+                              incl_listo = TRUE,
                               div293_threshold = 250e3)
 
 TaxExpenditure2021 <-
@@ -46,9 +100,18 @@ TaxExpenditure2021 <-
                             new_cap = 0,
                             new_age_based_cap = FALSE,
                             prv_age_based_cap = FALSE,
+                            prv_listo_rate = 0.15,
+                            new_listo_rate = 0,
                             new_contr_tax = "mr - 0%",
                             prv_div293_threshold = 250e3,
                             new_div293_threshold = Inf)
+
+TaxExpenditure2021_earnings <-
+  s1718 %>%
+  project_to(to_fy = "2020-21",
+             fy.year.of.sample.file = "2017-18",
+             lf.series = 0,
+             r_super_balance = 1.07)
 
 
 grattan_save_all <- function(filename, object) {
@@ -77,8 +140,10 @@ grattan_save_all(provide.file("Figure-3-1/Figure31.pdf"), {
     theme_grattan() +
     labs(title = "Superannuation tax breaks primarily benefit high-income earners",
          subtitle = "Percentage of total tax breaks",
-         caption = paste0("Notes: Value of tax breaks calculated against a comprehensive",
+         caption = paste0("Notes: Value of tax breaks calculated against a comprehensive ",
                           "income tax benchmark. Deciles sorted by taxable income.",
+                          "Superannuation tax breaks includes "
+
                           "Projections to 2020-21 assume 2% wage growth and 0% ",
                           "growth in the number of taxfilers from 2019-20 to 2020-21 ",
                           "Only includes taxpayers that made a pre-tax contribution ",
