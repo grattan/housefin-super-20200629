@@ -2,6 +2,7 @@ options("dplyr.summarise.inform" = FALSE)
 options(digits = 3)
 options(scipen = 99)
 options(encoding = "UTF-8")
+stopifnot("charts.R" %in% dir())
 library(data.table)
 library(hutilscpp)
 library(taxstats)
@@ -25,6 +26,22 @@ s1718 <-
              readr::read_csv("~/taxstats1718/2018_sample_file.csv")
            })
 
+# Verify or modify balances to line up with APRA
+TOTAL_AUM_APRA_1718 <- (1914087 + 2129 + 735400) * 1e6  # >4 members + <=4 members + SMSF
+TOTAL_AUM_APRA_1819 <- (2071149 + 2098 + 747600) * 1e6  # >4 members + <=4 members + SMSF
+TOTAL_AUM_APRA_1920 <- TOTAL_AUM_APRA_1819 * 1.07
+# https://www.apra.gov.au/sites/default/files/2020-01/Annual%20Superannuation%20Bulletin%20June%202019.pdf
+# (Also colocated PDF)
+APRA_NET_INVESTMENT_INCOME_1819 <- (128954 + 145 + 32623) * 1e6
+APRA_P_GEQ_5_MEMBERS <- 2071149 * 1e6 / TOTAL_AUM_APRA_1819
+APRA_NET_EARNINGS_POST_TAX_1819 <- 120986 * 1e6 / APRA_P_GEQ_5_MEMBERS ## >4 members
+
+
+r_APRA_over_ATO <-
+  with(s1718, {
+    TOTAL_AUM_APRA_1718 / sum(MCS_Ttl_Acnt_Bal * 50)
+  })
+
 
 
 earnings_tax_concession <- function(.sample_file,
@@ -35,6 +52,7 @@ earnings_tax_concession <- function(.sample_file,
                                     p_excess_earnings_cgt = 0.8) {
   apra_concord <- match.arg(apra_concord)
   s2021 <- copy(.sample_file)
+  balance_cap <- 0
   with(s2021, {
 
     # Assume 7% returns in accumulation, 5% in retiremtn
@@ -74,7 +92,7 @@ earnings_tax_concession <- function(.sample_file,
 
     delta <- new_tax - old_tax + new_earnings_tax - old_earnings_tax
 
-    sum(delta) * wt
+    s2021[, earnings_delta := delta]
   })
 }
 
@@ -111,7 +129,8 @@ TaxExpenditure2021_earnings <-
   project_to(to_fy = "2020-21",
              fy.year.of.sample.file = "2017-18",
              lf.series = 0,
-             r_super_balance = 1.07)
+             r_super_balance = 1.07) %>%
+  earnings_tax_concession(apra_concord = "weight")
 
 
 grattan_save_all <- function(filename, object) {
@@ -124,14 +143,16 @@ grattan_save_all <- function(filename, object) {
 
 # Figure 3.
 grattan_save_all(provide.file("Figure-3-1/Figure31.pdf"), {
-  TaxExpenditure2021 %>%
+  merge(TaxExpenditure2021,
+        TaxExpenditure2021_earnings,
+        by = "Ind") %>%
     as_tibble %>%
     filter(old_concessional_contributions > 0) %>%
     mutate_ntile("old_Taxable_Income", n = 10L) %>%
 
 
     group_by(old_Taxable_IncomeDecile) %>%
-    summarise(TotalBenefits = sum(new_revenue - prv_revenue)) %>%
+    summarise(TotalBenefits = sum(earnings_delta + new_revenue - prv_revenue)) %>%
     mutate(Decile = factor(old_Taxable_IncomeDecile)) %>%
     mutate(Percentage = 100 * TotalBenefits / sum(TotalBenefits)) %>%
     ggplot(aes(x = Decile, y = Percentage)) +
@@ -142,8 +163,13 @@ grattan_save_all(provide.file("Figure-3-1/Figure31.pdf"), {
          subtitle = "Percentage of total tax breaks",
          caption = paste0("Notes: Value of tax breaks calculated against a comprehensive ",
                           "income tax benchmark. Deciles sorted by taxable income.",
-                          "Superannuation tax breaks includes "
-
+                          "Superannuation tax breaks includes concessional taxes for ",
+                          "contributions and earnings, taking into account LISTO. ",
+                          "Assumes 5% earnings in retirement and 7% earnings in accumulation; ",
+                          "assumes that the effective tax on earnings is 10% ",
+                          "assumes, if earnings taxes were abolished, ",
+                          "taxfilers would put 80% of earnings income into assets that ",
+                          "would enjoy the capital gains tax discount; ",
                           "Projections to 2020-21 assume 2% wage growth and 0% ",
                           "growth in the number of taxfilers from 2019-20 to 2020-21 ",
                           "Only includes taxpayers that made a pre-tax contribution ",
